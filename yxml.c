@@ -26,6 +26,7 @@
 
 #include <yxml.h>
 #include <string.h>
+#include <stdlib.h>
 
 typedef enum {
 	YXMLS_string,
@@ -190,10 +191,21 @@ static inline yxml_ret_t yxml_dataattr(yxml_t *x, unsigned ch) {
 	return YXML_ATTRVAL;
 }
 
+static int yxml_grow(yxml_t *x) {
+	size_t oldstack = (size_t)x->stack;
+	x->stacksize *= 2;
+	x->stack = realloc(x->stack, x->stacksize);
+	if (!x->stack) return 0;
+	int d = (size_t)x->stack - oldstack;
+	x->elem += d;
+	x->pi += d;
+	x->attr += d;
+	return 1;
+}
 
 static yxml_ret_t yxml_pushstack(yxml_t *x, char **res, unsigned ch) {
-	if(x->stacklen+2 >= x->stacksize)
-		return YXML_ESTACK;
+	if(x->stacklen+2 >= x->stacksize && !yxml_grow(x))
+		return YXML_EMEM;
 	x->stacklen++;
 	*res = (char *)x->stack+x->stacklen;
 	x->stack[x->stacklen] = ch;
@@ -204,8 +216,8 @@ static yxml_ret_t yxml_pushstack(yxml_t *x, char **res, unsigned ch) {
 
 
 static yxml_ret_t yxml_pushstackc(yxml_t *x, unsigned ch) {
-	if(x->stacklen+1 >= x->stacksize)
-		return YXML_ESTACK;
+	if(x->stacklen+1 >= x->stacksize && !yxml_grow(x))
+		return YXML_EMEM;
 	x->stack[x->stacklen] = ch;
 	x->stacklen++;
 	x->stack[x->stacklen] = 0;

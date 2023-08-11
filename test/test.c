@@ -27,7 +27,7 @@
 #include <inttypes.h>
 
 
-static char stack[8*1024];
+static char *stack;
 static int verbose = 0;
 
 
@@ -116,6 +116,11 @@ int main(int argc, char **argv) {
 	int c;
 	yxml_ret_t r;
 	yxml_t x[1];
+	stack = malloc(8*1024);
+	if (!stack) {
+		perror("malloc failed");
+		return 1;
+	}
 	yxml_init(x, stack, sizeof(stack));
 
 	verbose = argc > 1;
