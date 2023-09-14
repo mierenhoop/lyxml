@@ -15,8 +15,21 @@ int parse(lua_State *L) {
 
     switch (ret) {
     case YXML_ELEMSTART:
+        /* fallthrough */
     case YXML_ELEMEND:
         lua_pushstring(L, x->elem);
+        nret++;
+        break;
+    case YXML_ATTRSTART:
+        lua_pushstring(L, x->attr);
+        nret++;
+        break;
+    case YXML_CONTENT:
+        /* fallthrough */
+    case YXML_ATTRVAL:
+        /* fallthrough */
+    case YXML_PICONTENT:
+        lua_pushstring(L, x->data);
         nret++;
         break;
     }
