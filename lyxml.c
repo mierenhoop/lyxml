@@ -1,111 +1,140 @@
-#include <yxml.h>
 #include <lua.h>
 #include <lauxlib.h>
+
+#include <stdbool.h>
+#include <ctype.h>
 #include <stdlib.h>
 
-#define DEFSTACKSZ 4096
+#include "yxml.h"
 
-int parse(lua_State *L) {
-    yxml_t* x = luaL_checkudata(L, 1, "yxml");
-    int c = luaL_checkinteger(L, 2);
-    int nret = 1;
+struct Decoder {
+  yxml_t x;
+  const char *p;
+  const char *end;
+  luaL_Buffer b;
+  bool trimcontent; // trim whitespace around content
+  bool acceptpartial; // for use in streaming xml, TODO: have streaming decoder function?
+  const char *tagfield;
+};
 
-    int ret = yxml_parse(x, c);
-    lua_pushinteger(L, ret);
-
-    switch (ret) {
+// Returns last yxml status
+static int ParseElement(lua_State *L, struct Decoder *d) {
+  struct luaL_Buffer b;
+  int n = 0;
+  int c = 0;
+  bool incontent = false;
+  lua_pushstring(L, d->x.elem);
+  lua_rawseti(L, -2, 0);
+  for (;d->p < d->end; d->p++) {
+    switch ((c = yxml_parse(&d->x, *d->p))) {
+    case YXML_OK:
+      break;
     case YXML_ELEMSTART:
-        /* fallthrough */
+      if (incontent) {
+        incontent = false;
+        luaL_pushresult(&b);
+        lua_rawseti(L, -2, ++n);
+      }
+      lua_newtable(L);
+      lua_pushvalue(L, -1);
+      lua_rawseti(L, -3, ++n);
+      if ((c = ParseElement(L, d)) < 0)
+        goto end;
+      break;
     case YXML_ELEMEND:
-        lua_pushstring(L, x->elem);
-        nret++;
-        break;
+      if (incontent) {
+        incontent = false;
+        luaL_pushresult(&b);
+        lua_rawseti(L, -2, ++n);
+      }
+      goto end;
     case YXML_ATTRSTART:
-        lua_pushstring(L, x->attr);
-        nret++;
-        break;
-    case YXML_CONTENT:
-        /* fallthrough */
+      luaL_buffinit(L, &b);
+      break;
     case YXML_ATTRVAL:
-        /* fallthrough */
+      luaL_addstring(&b, d->x.data);
+      break;
+    case YXML_ATTREND:
+      luaL_pushresult(&b);
+      lua_setfield(L, -2, d->x.attr);
+      break;
+    case YXML_CONTENT:
+      //if (!incontent && isspace(x.data[0])) {
+      //  break;
+      //}
+      if (!incontent) {
+        incontent = true;
+        luaL_buffinit(L, &b);
+      }
+      if (d->x.data[0] != '>'){
+        luaL_addstring(&b, d->x.data);
+      }
+      break;
+    case YXML_PISTART:
     case YXML_PICONTENT:
-        lua_pushstring(L, x->data);
-        nret++;
-        break;
+    case YXML_PIEND:
+      break;
+    default:
+      goto end;
     }
-
-    return nret;
+  }
+end:
+  lua_pop(L,1);
+  return c;
 }
 
-int eof(lua_State *L) {
-    yxml_t *x = luaL_checkudata(L, 1, "yxml");
-
-    lua_pushinteger(L, yxml_eof(x));
-
-    return 1;
+static int PushError(lua_State *L, int err) {
+  const char *s = "unknown error";
+  switch (err) {
+  case YXML_EEOF:
+    s = "unexpected end of document";
+    break;
+  case YXML_EREF:
+    s = "invalid character";
+    break;
+  case YXML_ECLOSE:
+    s = "wrong close tag";
+    break;
+  case YXML_EMEM:
+    s = "out of memory";
+    break;
+  case YXML_ESYN:
+    s = "syntax error";
+    break;
+  }
+  lua_pushnil(L);
+  lua_pushstring(L, s);
+  return 2;
 }
 
-static const luaL_Reg yxmlfn[] = {
-    {"parse", parse},
-    {"eof", eof},
+static int DecodeXml(lua_State *L) {
+  struct Decoder d = {0};
+  int c;
+  char *s;
+  if (!(s = malloc(1024)))
+    return PushError(L, YXML_EMEM);
+  yxml_init(&d.x, s, 1024);
+  d.p = luaL_checkstring(L, 1);
+  d.end = d.p + luaL_len(L, -1);
+  while (d.p < d.end && (c = yxml_parse(&d.x, *d.p++)) == YXML_OK) {}
+  if (c != YXML_ELEMSTART)
+    return PushError(L, c);
+  lua_newtable(L);
+  lua_pushvalue(L, -1);
+  if ((c = ParseElement(L, &d)) < 0) {
+    lua_pop(L, 1);
+    return PushError(L, c);
+  }
+  return 1;
+}
+
+static const luaL_Reg lyxmlfuncs[] = {
+    {"decode", DecodeXml},
     {0},
 };
-
-int gc(lua_State *L) {
-    yxml_t* x = luaL_checkudata(L, 1, "yxml");
-
-    free(x->stack);
-
-    return 0;
-}
-
-static const luaL_Reg metamethods[] = {
-    {"__gc", gc},
-    {0},
-};
-
-int init(lua_State *L) {
-    yxml_t *x = lua_newuserdata(L, sizeof(yxml_t));
-    luaL_setmetatable(L, "yxml");
-
-    unsigned char *stack = malloc(DEFSTACKSZ);
-    yxml_init(x, stack, DEFSTACKSZ);
-
-    return 1;
-}
-
-static const luaL_Reg luayxml[] = {
-    {"init", init},
-    {0},
-};
-
-#define PUSHCONST(v) (lua_pushinteger(L, YXML_##v), lua_setfield(L, -2, #v))
 
 int luaopen_lyxml(lua_State *L) {
-    luaL_newlib(L, luayxml);
-
-    luaL_newmetatable(L, "yxml");
-    luaL_setfuncs(L, metamethods, 0);
-    luaL_newlibtable(L, yxmlfn);
-    luaL_setfuncs(L, yxmlfn, 0);
-    lua_setfield(L, -2, "__index");
-    lua_pop(L, 1);
-
-    PUSHCONST(EEOF     );
-    PUSHCONST(EREF     );
-    PUSHCONST(ECLOSE   );
-    PUSHCONST(EMEM     );
-    PUSHCONST(ESYN     );
-    PUSHCONST(OK       );
-    PUSHCONST(ELEMSTART);
-    PUSHCONST(CONTENT  );
-    PUSHCONST(ELEMEND  );
-    PUSHCONST(ATTRSTART);
-    PUSHCONST(ATTRVAL  );
-    PUSHCONST(ATTREND  );
-    PUSHCONST(PISTART  );
-    PUSHCONST(PICONTENT);
-    PUSHCONST(PIEND    );
-
-    return 1;
+  luaL_newlib(L, lyxmlfuncs);
+  return 1;
 }
+
