@@ -125,5 +125,7 @@ local s = [[
 </catalog>
 ]]
 
-assert(lyxml.decode(s))
+root = assert(lyxml.decode(s, {tagfield="tag"}))
+assert(root.tag == "catalog")
+print(require"inspect"(root))
 print"Test passed"
