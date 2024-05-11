@@ -7,12 +7,13 @@
 
 #include "yxml.h"
 
+#define INITIAL_STACK_SIZE 1024
+
 struct Decoder {
   yxml_t x;
   const char *p;
   const char *end;
-  bool trimcontent; // trim whitespace around content
-  bool acceptpartial; // for use in streaming xml, TODO: have streaming decoder function?
+  bool trimcontent;
   const char *tagfield;
 };
 
@@ -21,13 +22,14 @@ static int ParseElement(lua_State *L, struct Decoder *d) {
   struct luaL_Buffer b;
   int n = 0;
   int c = 0;
-  int nspace;
+  int nspace = 0;
   bool incontent = false;
+  bool foundfirstgraph = false;
 #define FinishContent do { \
       if (incontent) { \
         int l = luaL_bufflen(&b); \
         incontent = false; \
-        if (d->trimcontent && nspace) \
+        if (d->trimcontent && foundfirstgraph && nspace) \
           luaL_buffsub(&b, nspace); \
         luaL_pushresult(&b); \
         if (l) \
@@ -41,8 +43,8 @@ static int ParseElement(lua_State *L, struct Decoder *d) {
     lua_setfield(L, -2, d->tagfield);
   else
     lua_rawseti(L, -2, 0);
-  for (;d->p < d->end; d->p++) {
-    switch ((c = yxml_parse(&d->x, *d->p))) {
+  while (d->p < d->end) {
+    switch ((c = yxml_parse(&d->x, *d->p++))) {
     case YXML_OK:
       break;
     case YXML_ELEMSTART:
@@ -67,17 +69,20 @@ static int ParseElement(lua_State *L, struct Decoder *d) {
       lua_setfield(L, -2, d->x.attr);
       break;
     case YXML_CONTENT:
-      if (!incontent) { // skip the first >
+      if (!incontent) {
         incontent = true;
+        foundfirstgraph = false;
         luaL_buffinit(L, &b);
         nspace = 0;
-        break;
       }
-      if (isspace(d->x.data[0]))
+      if (isspace(d->x.data[0])) {
         nspace++;
-      else
+      } else {
+        foundfirstgraph = true;
         nspace = 0;
-      luaL_addstring(&b, d->x.data);
+      }
+      if (foundfirstgraph || !d->trimcontent)
+        luaL_addstring(&b, d->x.data);
       break;
     case YXML_PISTART:
     case YXML_PICONTENT:
@@ -135,9 +140,9 @@ static int DecodeXml(lua_State *L) {
       d.trimcontent = lua_toboolean(L, -1);
   }
   lua_settop(L, 1);
-  if (!(s = malloc(1024)))
+  if (!(s = malloc(INITIAL_STACK_SIZE)))
     return PushError(L, YXML_EMEM);
-  yxml_init(&d.x, s, 1024);
+  yxml_init(&d.x, s, INITIAL_STACK_SIZE);
   while (d.p < d.end && (c = yxml_parse(&d.x, *d.p++)) == YXML_OK) {}
   if (c != YXML_ELEMSTART) {
     free(s);
