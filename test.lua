@@ -3,7 +3,6 @@
 local lyxml = require"lyxml"
 
 local s = [[
-<?xml version="1.0"?>
 <catalog>
    <book id="bk101">
       <author>Gambardella, Matthew</author>
@@ -122,10 +121,10 @@ local s = [[
       integrated into a comprehensive development 
       environment.</description>
    </book>
-</catalog>
-]]
+</catalog>]]
 
-root = assert(lyxml.decode(s, {tagfield="tag"}))
-assert(root.tag == "catalog")
-print(require"inspect"(root))
+root = assert(lyxml.decode(s, { trimcontent = false }))
+
+assert(s == require"encode"(root))
+
 print"Test passed"
